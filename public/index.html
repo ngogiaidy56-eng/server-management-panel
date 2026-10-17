@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <title>Trạm Quản Lý Vận Hành Server & App</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; background: #1e1e2e; color: #fff; margin: 20px; }
+    .card { background: #2b2b3d; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+    .metrics { display: flex; gap: 20px; }
+    .metric-box { flex: 1; background: #3b3b52; padding: 15px; border-radius: 6px; text-align: center; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { padding: 10px; border-bottom: 1px solid #444; text-align: left; }
+    button { padding: 6px 12px; margin-right: 5px; cursor: pointer; border: none; border-radius: 4px; }
+    .btn-start { background: #4caf50; color: white; }
+    .btn-stop { background: #f44336; color: white; }
+  </style>
+</head>
+<body>
+  <h1>Dashboard Vận Hành Hệ Thống</h1>
+
+  <!-- Khối giám sát chỉ số -->
+  <div class="card">
+    <h2>Trạng Thái Máy Chủ</h2>
+    <div class="metrics">
+      <div class="metric-box">
+        <h3>CPU Usage</h3>
+        <p id="cpu">- %</p>
+      </div>
+      <div class="metric-box">
+        <h3>RAM Usage</h3>
+        <p id="ram">- GB / - GB</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Khối quản lý Web Server & App Container -->
+  <div class="card">
+    <h2>Danh Sách Web Server & App (Docker)</h2>
+    <button onclick="loadContainers()">Tải lại danh sách</button>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Tên App/Server</th>
+          <th>Image</th>
+          <th>Trạng thái</th>
+          <th>Hành động</th>
+        </tr>
+      </thead>
+      <tbody id="container-list"></tbody>
+    </table>
+  </div>
+
+  <script>
+    const socket = io();
+
+    // Cập nhật chỉ số CPU/RAM realtime
+    socket.on('server-metrics', (data) => {
+      document.getElementById('cpu').innerText = `${data.cpuUsage}%`;
+      document.getElementById('ram').innerText = `${data.ramUsed} GB / ${data.ramTotal} GB (${data.ramPercent}%)`;
+    });
+
+    // Lấy danh sách Web server / App
+    async function loadContainers() {
+      const res = await fetch('/api/containers');
+      const containers = await res.json();
+      const tbody = document.getElementById('container-list');
+      tbody.innerHTML = '';
+
+      containers.forEach(c => {
+        const name = c.Names[0].replace('/', '');
+        const status = c.State;
+        const row = `
+          <tr>
+            <td>${c.Id.substring(0, 12)}</td>
+            <td><b>${name}</b></td>
+            <td>${c.Image}</td>
+            <td>${status}</td>
+            <td>
+              <button class="btn-start" onclick="controlApp('${c.Id}', 'start')">Start</button>
+              <button class="btn-stop" onclick="controlApp('${c.Id}', 'stop')">Stop</button>
+            </td>
+          </tr>
+        `;
+        tbody.innerHTML += row;
+      });
+    }
+
+    async function controlApp(id, action) {
+      await fetch(`/api/containers/${id}/${action}`, { method: 'POST' });
+      loadContainers();
+    }
+
+    // Tải dữ liệu ban đầu
+    loadContainers();
+  </script>
+</body>
+</html>
