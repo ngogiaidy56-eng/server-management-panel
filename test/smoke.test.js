@@ -314,3 +314,20 @@ test('viewer can authenticate but cannot enter the Admin user API', async () => 
     assert.equal((await logoutWithoutCsrf.json()).error.code, 'CSRF_INVALID');
   });
 });
+
+
+test('public app catalog endpoint is available without a session', async () => {
+  await withServer(makePool(null), async base => {
+    const response = await fetch(base + '/api/v1/store/apps');
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).apps, []);
+  });
+});
+
+test('app management API rejects unauthenticated access', async () => {
+  await withServer(makePool(null), async base => {
+    const response = await fetch(base + '/api/v1/admin/apps');
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).error.code, 'AUTH_REQUIRED');
+  });
+});
