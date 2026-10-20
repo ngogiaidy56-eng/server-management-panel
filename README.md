@@ -34,6 +34,15 @@ Use Node.js 22 and PostgreSQL. Copy .env.example to .env, supply local values, t
 
 CI uses Node.js 22 and runs syntax, configuration, HTTP security, session and RBAC tests. Render's build command runs the same checks before a release.
 
+## Separate app store and developer console
+
+- Public store: `/` — public catalog and release downloads.
+- Operations Admin: `/admin` — users, RBAC, Render monitoring and audit logs.
+- Developer Console: `/admin/studio` — create app metadata, create versioned releases, publish releases and apps.
+- Public APIs: `GET /api/v1/store/apps` and `GET /api/v1/store/apps/:slug`; Admin APIs require authentication, role checks and CSRF for mutations.
+- Binary uploads are not implemented by this feature. Upload packages to object storage/CDN first, then register an HTTPS URL and optional SHA-256 checksum.
+- Full workflow: [App Store and Developer Console](docs/app-store-and-developer-console.md).
+
 ## API endpoints
 
 - GET /healthz: readiness check including database connectivity.
