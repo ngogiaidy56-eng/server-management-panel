@@ -1,4 +1,4 @@
-# Server Management Panel v2.1.0
+# Server Management Panel v2.2.0
 
 Production-oriented admin console for monitoring its current Render runtime and managing an explicit allowlist of Render services. PostgreSQL stores users, sessions and audit records.
 
