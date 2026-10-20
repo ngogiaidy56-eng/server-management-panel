@@ -35,6 +35,28 @@ function createApp(pool,env){
  app.post('/api/v1/auth/login',loginLimit,apiRoute(async(req,res)=>{const email=typeof req.body.email==='string'?req.body.email.trim().toLowerCase():'',password=typeof req.body.password==='string'?req.body.password:'';if(!email||!password||email.length>254||password.length>256)return sendError(res,400,'INVALID_INPUT','Enter a valid email and password.');const result=await pool.query('SELECT id,email,password_hash,role,active,created_at FROM users WHERE email=$1 LIMIT 1',[email]),u=result.rows[0],matches=await passwordMatches(password,u?u.password_hash:'');if(!u||!u.active||!matches){await pool.query('INSERT INTO audit_logs(actor_id,action,target_type,target_id,detail,ip_address) VALUES(NULL,$1,$2,$3,$4::jsonb,$5)',['auth.login_failed','user',email,JSON.stringify({reason:'invalid_credentials'}),req.ip||null]).catch(()=>{});return sendError(res,401,'INVALID_CREDENTIALS','Email or password is incorrect.')}const t=token(),csrfToken=token();await pool.query("INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at) VALUES($1,$2,$3,NOW()+INTERVAL '12 hours')",[tokenHash(t,env.SESSION_SECRET),u.id,csrfToken]);req.user=u;await audit(pool,req,'auth.login','user',u.id,{});res.setHeader('Set-Cookie',setCookie(t,43200,env.NODE_ENV==='production'));res.json({user:publicUser(u),csrfToken,expiresIn:43200})}));
  app.get('/api/v1/auth/me',auth,(req,res)=>res.json({user:publicUser(req.user),csrfToken:req.csrf}));
  app.post('/api/v1/auth/logout',auth,csrf,apiRoute(async(req,res)=>{await pool.query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash(cookies(req.headers.cookie)[COOKIE],env.SESSION_SECRET)]);await audit(pool,req,'auth.logout','user',req.user.id,{});res.setHeader('Set-Cookie',setCookie('',0,env.NODE_ENV==='production'));res.status(204).end()}));
+ app.post('/api/v1/auth/change-password',auth,csrf,apiRoute(async(req,res)=>{
+  const currentPassword=typeof req.body.currentPassword==='string'?req.body.currentPassword:'';
+  const newPassword=typeof req.body.newPassword==='string'?req.body.newPassword:'';
+  if(!currentPassword||!newPassword||currentPassword.length>256||newPassword.length>256)return sendError(res,400,'INVALID_INPUT','Enter your current password and a valid new password.');
+  const client=await pool.connect(),nextSession=token(),nextCsrf=token();
+  try{
+   await client.query('BEGIN');
+   const result=await client.query('SELECT password_hash FROM users WHERE id=$1 AND active=TRUE FOR UPDATE',[req.user.id]);
+   if(!result.rows.length){await client.query('ROLLBACK');return sendError(res,401,'ACCOUNT_UNAVAILABLE','Your account is no longer active.')}
+   if(!await passwordMatches(currentPassword,result.rows[0].password_hash)){await client.query('ROLLBACK');return sendError(res,403,'CURRENT_PASSWORD_INCORRECT','The current password is incorrect.')}
+   let nextHash;
+   try{nextHash=await makePasswordHash(newPassword)}catch(e){await client.query('ROLLBACK');return sendError(res,400,'INVALID_PASSWORD',e.message)}
+   await client.query('UPDATE users SET password_hash=$2,updated_at=NOW() WHERE id=$1',[req.user.id,nextHash]);
+   await client.query('DELETE FROM sessions WHERE user_id=$1',[req.user.id]);
+   await client.query("INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at) VALUES($1,$2,$3,NOW()+INTERVAL '12 hours')",[tokenHash(nextSession,env.SESSION_SECRET),req.user.id,nextCsrf]);
+   await client.query('COMMIT');
+  }catch(e){await client.query('ROLLBACK').catch(()=>{});throw e}
+  finally{client.release()}
+  await audit(pool,req,'auth.password_change','user',req.user.id,{});
+  res.setHeader('Set-Cookie',setCookie(nextSession,43200,env.NODE_ENV==='production'));
+  res.json({ok:true,csrfToken:nextCsrf,expiresIn:43200});
+ }));
  app.get('/api/v1/monitoring/local',auth,(_req,res)=>{const m=process.memoryUsage();res.json({capturedAt:new Date().toISOString(),runtime:{node:process.version,platform:process.platform,uptimeSeconds:Math.floor(process.uptime()),pid:process.pid},processMemory:{rssBytes:m.rss,heapUsedBytes:m.heapUsed,heapTotalBytes:m.heapTotal},system:{visibleCpuCount:os.availableParallelism?os.availableParallelism():os.cpus().length,loadAverage:os.loadavg(),freeMemoryBytes:os.freemem(),totalMemoryBytes:os.totalmem()},scope:'Current app instance only; not an account-wide host or Docker inventory.'})});
  app.get('/api/v1/services',auth,role('admin','operator'),apiRoute(async(_req,res)=>{const ids=allowlist(env);if(!ids.size)return res.json({services:[],integrationConfigured:!!env.RENDER_API_KEY,allowedServiceIdsConfigured:false});const data=await renderApi(env,'/services?limit=100'),items=Array.isArray(data)?data:(data.services||[]);res.json({services:items.map(normalizeService).filter(s=>ids.has(s.id)),integrationConfigured:true,allowedServiceIdsConfigured:true})}));
  app.get('/api/v1/services/:id/deploys',auth,role('admin','operator'),apiRoute(async(req,res)=>{serviceAllowed(req.params.id);const data=await renderApi(env,'/services/'+encodeURIComponent(req.params.id)+'/deploys?limit=10'),items=Array.isArray(data)?data:(data.deploys||[]);res.json({deploys:items.map(i=>{const d=i.deploy||i;return{id:d.id,status:d.status,trigger:d.trigger,commit:d.commit?{id:d.commit.id,message:d.commit.message}:null,createdAt:d.createdAt,updatedAt:d.updatedAt,finishedAt:d.finishedAt}})})}));
