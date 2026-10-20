@@ -74,11 +74,18 @@ async function migrate(pool,env){
  }catch(e){await client.query('ROLLBACK').catch(()=>{});throw e}
  finally{client.release()}
 }
-async function start(){
- const env=process.env;if(!env.DATABASE_URL)throw Error('DATABASE_URL is required.');if(!env.SESSION_SECRET||env.SESSION_SECRET.length<32)throw Error('SESSION_SECRET must be at least 32 characters.');
+function validateConfig(env){
+ if(!env.DATABASE_URL||!String(env.DATABASE_URL).trim())throw Error('DATABASE_URL is required.');
+ if(!env.SESSION_SECRET||env.SESSION_SECRET.length<32)throw Error('SESSION_SECRET must be at least 32 characters.');
  if(env.NODE_ENV==='production'){let u;try{u=new URL(env.APP_ORIGIN||'')}catch(_){throw Error('APP_ORIGIN must be the exact public HTTPS origin.')}if(u.protocol!=='https:'||u.origin!==env.APP_ORIGIN)throw Error('APP_ORIGIN must be HTTPS without a trailing slash.')}
- const pool=new Pool({connectionString:env.DATABASE_URL,max:Number(env.PG_POOL_MAX||10),idleTimeoutMillis:30000,connectionTimeoutMillis:10000,application_name:'server-management-panel'});
+ const poolMax=env.PG_POOL_MAX===undefined||env.PG_POOL_MAX===''?10:Number(env.PG_POOL_MAX);
+ if(!Number.isInteger(poolMax)||poolMax<1||poolMax>50)throw Error('PG_POOL_MAX must be an integer from 1 to 50.');
+ return {poolMax};
+}
+async function start(){
+ const env=process.env,config=validateConfig(env);
+ const pool=new Pool({connectionString:env.DATABASE_URL,max:config.poolMax,idleTimeoutMillis:30000,connectionTimeoutMillis:10000,application_name:'server-management-panel'});
  try{await migrate(pool,env);const server=createApp(pool,env).listen(Number(env.PORT||10000),'0.0.0.0',()=>console.info(JSON.stringify({event:'server_started',port:Number(env.PORT||10000),version:VERSION})));const cleanupTimer=setInterval(()=>pool.query('DELETE FROM sessions WHERE expires_at<=NOW()').catch(e=>console.error(JSON.stringify({event:'session_cleanup_failed',message:e.message}))),60*60*1000);cleanupTimer.unref();let closing=false;function shutdown(signal){if(closing)return;closing=true;clearInterval(cleanupTimer);console.info(JSON.stringify({event:'shutdown_started',signal}));server.close(()=>pool.end().then(()=>process.exit(0)));setTimeout(()=>process.exit(1),10000).unref()}process.on('SIGTERM',()=>shutdown('SIGTERM'));process.on('SIGINT',()=>shutdown('SIGINT'))}catch(e){await pool.end().catch(()=>{});throw e}
 }
 if(require.main===module)start().catch(e=>{console.error(JSON.stringify({event:'startup_failed',message:e.message}));process.exitCode=1});
-module.exports={createApp,passwordMatches,tokenHash,allowlist,trustedOrigin,normalizeService,makePasswordHash,wouldLockOutSelf};
+module.exports={createApp,passwordMatches,tokenHash,allowlist,trustedOrigin,normalizeService,makePasswordHash,wouldLockOutSelf,validateConfig};
