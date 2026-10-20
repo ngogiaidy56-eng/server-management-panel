@@ -14,9 +14,9 @@ Production-oriented admin console for monitoring its current Render runtime and 
 
 ## Render deployment
 
-1. Create a Render Postgres database, preferably in the same region as the web service.
-2. Review render.yaml in branch production-v2. The template defines a Starter web service in Singapore. Confirm resource plan, region and expected billing before provisioning.
-3. Configure DATABASE_URL, SESSION_SECRET (32+ random characters), APP_ORIGIN (exact HTTPS origin without trailing slash), BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD in Render environment variables.
+1. Review render.yaml in branch production-v2 before syncing the Blueprint. It defines a Starter web service and a `basic-256mb` Render Postgres database in Oregon to match the existing Render service; both are paid resources. Confirm current pricing and billing authorization in Render before provisioning.
+2. Sync the Blueprint. Render creates the web service and database and wires DATABASE_URL through the private database connection. SESSION_SECRET is generated automatically.
+3. Configure APP_ORIGIN (exact HTTPS origin without trailing slash), BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD when prompted. Confirm the generated service URL and set APP_ORIGIN to that exact `https://...onrender.com` origin.
 4. Deploy and wait for /healthz to pass. Sign in using the bootstrap admin once the first boot finishes.
 5. Remove BOOTSTRAP_ADMIN_PASSWORD from the live environment after the admin account is created. Existing users are not reset on subsequent restarts.
 6. For Render service control, configure RENDER_API_KEY and a narrow list of exact IDs in RENDER_ALLOWED_SERVICE_IDS. Without an allowlist, no remote service can be controlled. Never commit API keys.

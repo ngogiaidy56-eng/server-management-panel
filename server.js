@@ -49,14 +49,28 @@ function createApp(pool,env){
  return app;
 }
 async function migrate(pool,env){
- await pool.query("CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('admin','operator','viewer')),active BOOLEAN NOT NULL DEFAULT TRUE,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
- await pool.query("CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,csrf_token TEXT NOT NULL,expires_at TIMESTAMPTZ NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
- await pool.query('CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id)');
- await pool.query("CREATE TABLE IF NOT EXISTS audit_logs(id BIGSERIAL PRIMARY KEY,actor_id TEXT REFERENCES users(id) ON DELETE SET NULL,action TEXT NOT NULL,target_type TEXT,target_id TEXT,detail JSONB NOT NULL DEFAULT '{}'::jsonb,ip_address INET,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
- await pool.query('CREATE INDEX IF NOT EXISTS audit_logs_created_at_idx ON audit_logs(created_at DESC)');await pool.query('DELETE FROM sessions WHERE expires_at<=NOW()');
- const count=await pool.query('SELECT COUNT(*)::int AS count FROM users');if(Number(count.rows[0].count)>0)return;
- const email=String(env.BOOTSTRAP_ADMIN_EMAIL||'').trim().toLowerCase(),password=String(env.BOOTSTRAP_ADMIN_PASSWORD||'');if(!email||!password)throw Error('No admin exists. Set BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD for the first start.');if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw Error('BOOTSTRAP_ADMIN_EMAIL is invalid.');
- await pool.query('INSERT INTO users(id,email,password_hash,role) VALUES($1,$2,$3,$4)',[crypto.randomUUID(),email,await makePasswordHash(password),'admin']);console.info(JSON.stringify({event:'bootstrap_admin_created',email}));
+ const client=await pool.connect();
+ try{
+  await client.query('BEGIN');
+  await client.query('SELECT pg_advisory_xact_lock($1)',[742019385]);
+  await client.query("CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('admin','operator','viewer')),active BOOLEAN NOT NULL DEFAULT TRUE,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+  await client.query("CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,csrf_token TEXT NOT NULL,expires_at TIMESTAMPTZ NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+  await client.query('CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id)');
+  await client.query("CREATE TABLE IF NOT EXISTS audit_logs(id BIGSERIAL PRIMARY KEY,actor_id TEXT REFERENCES users(id) ON DELETE SET NULL,action TEXT NOT NULL,target_type TEXT,target_id TEXT,detail JSONB NOT NULL DEFAULT '{}'::jsonb,ip_address INET,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+  await client.query('CREATE INDEX IF NOT EXISTS audit_logs_created_at_idx ON audit_logs(created_at DESC)');
+  await client.query('DELETE FROM sessions WHERE expires_at<=NOW()');
+  const count=await client.query('SELECT COUNT(*)::int AS count FROM users');
+  if(Number(count.rows[0].count)>0){await client.query('COMMIT');return}
+  const email=String(env.BOOTSTRAP_ADMIN_EMAIL||'').trim().toLowerCase();
+  const password=String(env.BOOTSTRAP_ADMIN_PASSWORD||'');
+  if(!email||!password)throw Error('No admin exists. Set BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD for the first start.');
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw Error('BOOTSTRAP_ADMIN_EMAIL is invalid.');
+  const hash=await makePasswordHash(password);
+  await client.query('INSERT INTO users(id,email,password_hash,role) VALUES($1,$2,$3,$4)',[crypto.randomUUID(),email,hash,'admin']);
+  await client.query('COMMIT');
+  console.info(JSON.stringify({event:'bootstrap_admin_created',email}));
+ }catch(e){await client.query('ROLLBACK').catch(()=>{});throw e}
+ finally{client.release()}
 }
 async function start(){
  const env=process.env;if(!env.DATABASE_URL)throw Error('DATABASE_URL is required.');if(!env.SESSION_SECRET||env.SESSION_SECRET.length<32)throw Error('SESSION_SECRET must be at least 32 characters.');
