@@ -10,7 +10,8 @@ const {
   allowlist,
   trustedOrigin,
   normalizeService,
-  wouldLockOutSelf
+  wouldLockOutSelf,
+  validateConfig
 } = require('../server');
 
 const TEST_ORIGIN = 'https://admin.example.test';
@@ -96,6 +97,29 @@ test('scrypt password verification accepts only matching credentials', async () 
   assert.equal(await passwordMatches('wrong-password', encoded), false);
   assert.equal(await passwordMatches(password, 'not-a-password-hash'), false);
   await assert.rejects(makePasswordHash('too-short'), /14 to 256 characters/);
+});
+
+
+test('startup config validates database, HTTPS origin, secret strength and pool limits', () => {
+  assert.throws(() => validateConfig({ SESSION_SECRET: 'x'.repeat(32) }), /DATABASE_URL is required/);
+  assert.throws(() => validateConfig({
+    DATABASE_URL: 'postgres://example',
+    SESSION_SECRET: 'x'.repeat(32),
+    NODE_ENV: 'production',
+    APP_ORIGIN: 'http://admin.example.test'
+  }), /APP_ORIGIN must be HTTPS/);
+  assert.throws(() => validateConfig({
+    DATABASE_URL: 'postgres://example',
+    SESSION_SECRET: 'x'.repeat(32),
+    PG_POOL_MAX: '0'
+  }), /PG_POOL_MAX must be an integer/);
+  assert.deepEqual(validateConfig({
+    DATABASE_URL: 'postgres://example',
+    SESSION_SECRET: 'x'.repeat(32),
+    NODE_ENV: 'production',
+    APP_ORIGIN: TEST_ORIGIN,
+    PG_POOL_MAX: '5'
+  }), { poolMax: 5 });
 });
 
 test('Render allowlist parses exact service IDs only', () => {
