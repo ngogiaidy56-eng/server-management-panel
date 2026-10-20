@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: starter
     region: singapore
-    branch: production-v2
+    branch: main
     buildCommand: npm install --no-audit --no-fund
     startCommand: npm start
     healthCheckPath: /healthz
