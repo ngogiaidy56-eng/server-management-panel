@@ -1,99 +1,11 @@
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-  <meta charset="UTF-8">
-  <title>Trạm Quản Lý Vận Hành Server & App</title>
-  <script src="/socket.io/socket.io.js"></script>
-  <style>
-    body { font-family: Arial, sans-serif; background: #1e1e2e; color: #fff; margin: 20px; }
-    .card { background: #2b2b3d; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-    .metrics { display: flex; gap: 20px; }
-    .metric-box { flex: 1; background: #3b3b52; padding: 15px; border-radius: 6px; text-align: center; }
-    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-    th, td { padding: 10px; border-bottom: 1px solid #444; text-align: left; }
-    button { padding: 6px 12px; margin-right: 5px; cursor: pointer; border: none; border-radius: 4px; }
-    .btn-start { background: #4caf50; color: white; }
-    .btn-stop { background: #f44336; color: white; }
-  </style>
-</head>
-<body>
-  <h1>Dashboard Vận Hành Hệ Thống</h1>
-
-  <!-- Khối giám sát chỉ số -->
-  <div class="card">
-    <h2>Trạng Thái Máy Chủ</h2>
-    <div class="metrics">
-      <div class="metric-box">
-        <h3>CPU Usage</h3>
-        <p id="cpu">- %</p>
-      </div>
-      <div class="metric-box">
-        <h3>RAM Usage</h3>
-        <p id="ram">- GB / - GB</p>
-      </div>
-    </div>
-  </div>
-
-  <!-- Khối quản lý Web Server & App Container -->
-  <div class="card">
-    <h2>Danh Sách Web Server & App (Docker)</h2>
-    <button onclick="loadContainers()">Tải lại danh sách</button>
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>Tên App/Server</th>
-          <th>Image</th>
-          <th>Trạng thái</th>
-          <th>Hành động</th>
-        </tr>
-      </thead>
-      <tbody id="container-list"></tbody>
-    </table>
-  </div>
-
-  <script>
-    const socket = io();
-
-    // Cập nhật chỉ số CPU/RAM realtime
-    socket.on('server-metrics', (data) => {
-      document.getElementById('cpu').innerText = `${data.cpuUsage}%`;
-      document.getElementById('ram').innerText = `${data.ramUsed} GB / ${data.ramTotal} GB (${data.ramPercent}%)`;
-    });
-
-    // Lấy danh sách Web server / App
-    async function loadContainers() {
-      const res = await fetch('/api/containers');
-      const containers = await res.json();
-      const tbody = document.getElementById('container-list');
-      tbody.innerHTML = '';
-
-      containers.forEach(c => {
-        const name = c.Names[0].replace('/', '');
-        const status = c.State;
-        const row = `
-          <tr>
-            <td>${c.Id.substring(0, 12)}</td>
-            <td><b>${name}</b></td>
-            <td>${c.Image}</td>
-            <td>${status}</td>
-            <td>
-              <button class="btn-start" onclick="controlApp('${c.Id}', 'start')">Start</button>
-              <button class="btn-stop" onclick="controlApp('${c.Id}', 'stop')">Stop</button>
-            </td>
-          </tr>
-        `;
-        tbody.innerHTML += row;
-      });
-    }
-
-    async function controlApp(id, action) {
-      await fetch(`/api/containers/${id}/${action}`, { method: 'POST' });
-      loadContainers();
-    }
-
-    // Tải dữ liệu ban đầu
-    loadContainers();
-  </script>
-</body>
-</html>
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><meta name="theme-color" content="#0b1020"><title>Hendy Ops — Server Management</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head><body>
+<div id="toast" role="status" aria-live="polite"></div>
+<section id="login-screen" class="login-layout"><div class="login-card"><div class="brand-mark">SM</div><p class="eyebrow">HENDY OPERATIONS</p><h1>Server Management</h1><p class="muted">Đăng nhập vào bảng điều khiển vận hành.</p><form id="login-form"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" maxlength="254" required><label for="password">Mật khẩu</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required><button class="button primary full" type="submit">Đăng nhập →</button><p id="login-error" class="error-text"></p></form><p class="footnote">◈ Phiên đăng nhập dùng cookie HttpOnly</p></div><aside class="login-aside"><p class="eyebrow">OPERATIONS CONTROL PLANE</p><h2>Quan sát rõ ràng.<br><span>Vận hành an toàn.</span></h2><p>Theo dõi trạng thái ứng dụng Render, quản lý phân quyền và tra cứu nhật ký thao tác.</p><div class="aside-stats"><div><b>RBAC</b><small>Phân quyền</small></div><div><b>Audit</b><small>Truy vết</small></div><div><b>Health</b><small>Giám sát</small></div></div></aside></section>
+<div id="app-shell" class="app-shell" hidden><aside class="sidebar"><a class="brand" href="#overview"><span class="brand-mark small">SM</span><span><b>Hendy Ops</b><small>SERVER CONTROL</small></span></a><p class="sidebar-label">WORKSPACE <span>● ONLINE</span></p><nav><button class="nav-item active" data-view="overview">◫　Tổng quan</button><button id="nav-services" class="nav-item" data-view="services">▤　Render services</button><button class="nav-item admin-only" data-view="users" hidden>♙　Người dùng & quyền</button><button class="nav-item admin-only" data-view="audit" hidden>≋　Nhật ký kiểm toán</button></nav><div class="sidebar-bottom"><b>◈ Secure by design</b><p>API kiểm tra quyền và ghi nhật ký quản trị.</p><a href="/api/v1/meta" target="_blank" rel="noreferrer">API status ↗</a></div></aside>
+<main class="main-column"><header class="topbar"><div class="crumb">Operations <span>/</span> <b id="crumb-title">Tổng quan</b></div><div class="top-actions"><span class="environment">● PRODUCTION</span><button id="refresh" class="button icon-button" aria-label="Làm mới">↻</button><div class="user-summary"><span id="avatar" class="avatar">AD</span><div><b id="who"></b><small id="role-name"></small></div><button id="logout" class="button subtle">Đăng xuất</button></div></div></header>
+<div class="content"><section id="view-overview" class="view"><div class="page-heading"><div><p class="eyebrow">OVERVIEW / SYSTEM HEALTH</p><h1>Trung tâm vận hành</h1><p class="muted">Sức khỏe runtime, kết nối và service được cấp quyền.</p></div><small id="updated" class="muted"></small></div><div class="metric-grid"><article class="metric"><span>PROCESS UPTIME</span><b id="uptime">—</b><small>Instance hiện tại</small></article><article class="metric"><span>MEMORY RSS</span><b id="memory">—</b><small id="heap">Bộ nhớ Node.js</small></article><article class="metric"><span>DATABASE</span><b id="database">Checking…</b><small>Health endpoint</small></article><article class="metric"><span>ACCESS CONTROL</span><b>RBAC</b><small>Admin · Operator · Viewer</small></article></div><div class="two-col"><article class="panel"><div class="panel-heading"><div><h2>Runtime snapshot</h2><p class="muted">Thông số instance Render hiện tại</p></div><span class="pill">INSTANCE</span></div><div id="runtime">Đang tải…</div></article><article class="panel"><h2>Security controls</h2><p class="muted">Bảo vệ được kiểm tra ở máy chủ</p><div class="security-list"><p>✓　Session server-side và CSRF</p><p>✓　RBAC tại API</p><p>✓　Nhật ký kiểm toán</p><p>✓　Render service allowlist</p></div></article></div><article class="panel"><div class="panel-heading"><div><h2>Dịch vụ Render</h2><p class="muted">Service hiện được phép xem</p></div><button class="button secondary" data-go="services">Xem danh sách →</button></div><div id="preview">Đang tải…</div></article></section>
+<section id="view-services" class="view" hidden><div class="page-heading"><div><p class="eyebrow">INFRASTRUCTURE / RENDER API</p><h1>Render services</h1><p class="muted">Chỉ các service ID nằm trong allowlist mới có thể quản lý.</p></div><button id="refresh-services" class="button secondary">↻ Làm mới</button></div><div id="render-notice" class="notice" hidden></div><div id="services" class="service-grid">Đang tải…</div><article id="history-panel" class="panel" hidden><div class="panel-heading"><div><h2>Lịch sử triển khai</h2><p id="history-title" class="muted"></p></div><button id="close-history" class="button subtle">Đóng</button></div><div id="history"></div></article></section>
+<section id="view-users" class="view" hidden><div class="page-heading"><div><p class="eyebrow">ACCESS MANAGEMENT / RBAC</p><h1>Người dùng & phân quyền</h1><p class="muted">Tạo tài khoản, thu hồi quyền và phiên đăng nhập.</p></div></div><div class="two-col"><article class="panel"><h2>Tạo tài khoản</h2><p class="muted">Mật khẩu tối thiểu 14 ký tự</p><form id="create-user" class="stack-form"><label>Email</label><input id="new-email" type="email" maxlength="254" required><label>Mật khẩu tạm thời</label><input id="new-password" type="password" minlength="14" maxlength="256" required><label>Vai trò</label><select id="new-role"><option value="viewer">Viewer — chỉ đọc</option><option value="operator">Operator — giám sát</option><option value="admin">Admin — quản trị</option></select><button class="button primary">Tạo tài khoản</button></form></article><article class="panel"><h2>Vai trò hệ thống</h2><p><b class="role admin-role">ADMIN</b> Quản lý user, audit, deploy và restart.</p><p><b class="role operator-role">OPERATOR</b> Xem service và lịch sử deploy.</p><p><b class="role viewer-role">VIEWER</b> Chỉ xem tổng quan runtime.</p></article></div><article class="panel table-panel"><div class="panel-heading"><div><h2>Tài khoản</h2><p class="muted">Tối đa 500 tài khoản</p></div><button id="refresh-users" class="button secondary">Làm mới</button></div><div class="table-wrap"><table><thead><tr><th>Người dùng</th><th>Vai trò</th><th>Trạng thái</th><th>Ngày tạo</th><th>Thao tác</th></tr></thead><tbody id="users-table"></tbody></table></div></article></section>
+<section id="view-audit" class="view" hidden><div class="page-heading"><div><p class="eyebrow">SECURITY / TRACEABILITY</p><h1>Nhật ký kiểm toán</h1><p class="muted">Các lần đăng nhập và thao tác quản trị gần đây.</p></div><button id="refresh-audit" class="button secondary">↻ Làm mới</button></div><article class="panel table-panel"><div class="panel-heading"><div><h2>Event stream</h2><p class="muted">Mới nhất trước · tối đa 200 bản ghi</p></div></div><div class="table-wrap"><table><thead><tr><th>Thời điểm</th><th>Người thực hiện</th><th>Hành động</th><th>Đối tượng</th><th>Chi tiết</th></tr></thead><tbody id="audit-table"></tbody></table></div></article></section><footer class="footer">Hendy Ops Console · v2.0.0 <span>PostgreSQL-backed · Same-origin API</span></footer></div></main></div>
+<dialog id="confirm-dialog"><form method="dialog"><p class="eyebrow">CONFIRM OPERATION</p><h2 id="confirm-title">Confirm</h2><p id="confirm-message" class="muted"></p><div class="dialog-actions"><button class="button subtle" value="cancel">Hủy</button><button id="confirm-yes" class="button danger" value="confirm">Xác nhận</button></div></form></dialog></body></html>

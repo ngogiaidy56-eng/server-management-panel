@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: server-management-panel
+    runtime: node
+    plan: starter
+    region: singapore
+    branch: production-v2
+    buildCommand: npm install --no-audit --no-fund
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: APP_ORIGIN
+        sync: false
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+      - key: RENDER_API_KEY
+        sync: false
+      - key: RENDER_ALLOWED_SERVICE_IDS
+        sync: false
