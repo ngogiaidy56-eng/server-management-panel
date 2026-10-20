@@ -8,17 +8,17 @@ services:
     buildCommand: npm install --no-audit --no-fund
     startCommand: npm start
     healthCheckPath: /healthz
-    autoDeployTrigger: commit
+    autoDeployTrigger: checksPass
     maxShutdownDelaySeconds: 30
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: "10000"
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: server-management-panel-db
+          property: connectionString
       - key: SESSION_SECRET
-        sync: false
+        generateValue: true
       - key: APP_ORIGIN
         sync: false
       - key: BOOTSTRAP_ADMIN_EMAIL
@@ -29,3 +29,10 @@ services:
         sync: false
       - key: RENDER_ALLOWED_SERVICE_IDS
         sync: false
+
+databases:
+  - name: server-management-panel-db
+    databaseName: server_management_panel
+    user: server_management_panel
+    plan: basic_256mb
+    region: singapore
