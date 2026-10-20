@@ -14,7 +14,7 @@ Production-oriented admin console for monitoring its current Render runtime and 
 
 ## Render deployment
 
-1. Review render.yaml in branch production-v2 before syncing the Blueprint. It defines a Starter web service and a `basic-256mb` Render Postgres database in Singapore; both are paid resources. Confirm current pricing and billing authorization in Render before provisioning.
+1. Review render.yaml in branch production-v2 before syncing the Blueprint. It defines a Starter web service and a `basic-256mb` Render Postgres database in Oregon to match the existing Render service; both are paid resources. Confirm current pricing and billing authorization in Render before provisioning.
 2. Sync the Blueprint. Render creates the web service and database and wires DATABASE_URL through the private database connection. SESSION_SECRET is generated automatically.
 3. Configure APP_ORIGIN (exact HTTPS origin without trailing slash), BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD when prompted. Confirm the generated service URL and set APP_ORIGIN to that exact `https://...onrender.com` origin.
 4. Deploy and wait for /healthz to pass. Sign in using the bootstrap admin once the first boot finishes.
