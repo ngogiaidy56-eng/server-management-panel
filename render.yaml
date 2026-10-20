@@ -34,5 +34,5 @@ databases:
   - name: server-management-panel-db
     databaseName: server_management_panel
     user: server_management_panel
-    plan: basic_256mb
+    plan: basic-256mb
     region: singapore
