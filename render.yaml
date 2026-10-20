@@ -3,7 +3,7 @@ services:
     name: server-management-panel
     runtime: node
     plan: starter
-    region: singapore
+    region: oregon
     branch: main
     buildCommand: npm install --no-audit --no-fund
     startCommand: npm start
@@ -35,4 +35,4 @@ databases:
     databaseName: server_management_panel
     user: server_management_panel
     plan: basic-256mb
-    region: singapore
+    region: oregon
