@@ -1,70 +1,68 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const si = require('systeminformation');
-const Docker = require('dockerode');
-
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
-const docker = new Docker({ socketPath: '/var/run/docker.sock' }); // Kết nối tới Docker Engine
-
-app.use(express.json());
-app.use(express.static('public')); // Thư mục chứa giao diện web
-
-// --- REST API: Quản lý Docker Containers (Web Server / App) ---
-
-// 1. Lấy danh sách các ứng dụng/web server đang chạy
-app.get('/api/containers', async (req, res) => {
-  try {
-    const containers = await docker.listContainers({ all: true });
-    res.json(containers);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// 2. Khởi động / Dừng 1 Ứng dụng
-app.post('/api/containers/:id/:action', async (req, res) => {
-  const { id, action } = req.params;
-  try {
-    const container = docker.getContainer(id);
-    if (action === 'start') await container.start();
-    else if (action === 'stop') await container.stop();
-    else if (action === 'restart') await container.restart();
-    else return res.status(400).json({ error: 'Hành động không hợp lệ' });
-
-    res.json({ message: `Thực hiện ${action} thành công cho container ${id}` });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// --- REALTIME SOCKET: Giám sát thông số Server ---
-io.on('connection', (socket) => {
-  console.log('Admin đã kết nối:', socket.id);
-
-  // Gửi thông số máy chủ mỗi 2 giây
-  const interval = setInterval(async () => {
-    const cpu = await si.currentLoad();
-    const mem = await si.mem();
-    const os = await si.osInfo();
-
-    socket.emit('server-metrics', {
-      hostname: os.hostname,
-      cpuUsage: cpu.currentLoad.toFixed(2),
-      ramUsed: (mem.active / 1024 / 1024 / 1024).toFixed(2),
-      ramTotal: (mem.total / 1024 / 1024 / 1024).toFixed(2),
-      ramPercent: ((mem.active / mem.total) * 100).toFixed(2),
-    });
-  }, 2000);
-
-  socket.on('disconnect', () => {
-    clearInterval(interval);
-  });
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`[Server Management System] Trạm quản lý đang chạy tại http://localhost:${PORT}`);
-});
+'use strict';
+const crypto=require('node:crypto'),os=require('node:os'),path=require('node:path');
+const express=require('express'),helmet=require('helmet'),{rateLimit}=require('express-rate-limit'),{Pool}=require('pg');
+const VERSION=require('./package.json').version,COOKIE='hsp_session',ROLES=new Set(['admin','operator','viewer']),scrypt=require('node:util').promisify(crypto.scrypt);
+const token=()=>crypto.randomBytes(32).toString('base64url');
+const tokenHash=(value,secret)=>crypto.createHmac('sha256',String(secret)).update(String(value)).digest('hex');
+function cookies(header){const out=Object.create(null);String(header||'').split(';').forEach(p=>{const i=p.indexOf('=');if(i<1)return;try{out[p.slice(0,i).trim()]=decodeURIComponent(p.slice(i+1).trim())}catch(_){}});return out;}
+function setCookie(v,age,secure){return COOKIE+'='+encodeURIComponent(v)+'; Path=/; HttpOnly; SameSite=Strict; Max-Age='+age+(secure?'; Secure':'');}
+async function makePasswordHash(password){if(typeof password!=='string'||password.length<14||password.length>256)throw Error('Password must be 14 to 256 characters.');const salt=crypto.randomBytes(16),key=await scrypt(password,salt,64,{N:16384,r:8,p:1,maxmem:67108864});return 'scrypt$'+salt.toString('base64url')+'$'+Buffer.from(key).toString('base64url');}
+async function passwordMatches(password,encoded){if(typeof password!=='string'||typeof encoded!=='string')return false;const p=encoded.split('$');if(p.length!==3||p[0]!=='scrypt')return false;try{const salt=Buffer.from(p[1],'base64url'),expected=Buffer.from(p[2],'base64url');if(salt.length<16||expected.length!==64)return false;const actual=Buffer.from(await scrypt(password,salt,64,{N:16384,r:8,p:1,maxmem:67108864}));return crypto.timingSafeEqual(actual,expected)}catch(_){return false}}
+function sendError(res,status,code,message){return res.status(status).json({error:{code,message}});}
+function publicUser(u){return{id:u.id,email:u.email,role:u.role,active:u.active,createdAt:u.created_at};}
+function allowlist(env){return new Set(String(env.RENDER_ALLOWED_SERVICE_IDS||'').split(',').map(x=>x.trim()).filter(Boolean));}
+function originAllowed(req,env){const value=req.get('origin');if(!value)return req.get('sec-fetch-site')!=='cross-site';let origin;try{origin=new URL(value).origin}catch(_){return false}if(env.APP_ORIGIN)return origin===env.APP_ORIGIN;const proto=(req.get('x-forwarded-proto')||req.protocol).split(',')[0].trim();return origin===proto+'://'+req.get('host');}
+function apiRoute(fn){return(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);}
+function audit(pool,req,action,type,id,detail){return pool.query('INSERT INTO audit_logs(actor_id,action,target_type,target_id,detail,ip_address) VALUES($1,$2,$3,$4,$5::jsonb,$6)',[req.user?req.user.id:null,action,type||null,id?String(id):null,JSON.stringify(detail||{}),req.ip||null]).catch(e=>console.error(JSON.stringify({event:'audit_failed',message:e.message,requestId:req.id})));}
+async function renderApi(env,url,opts){if(!env.RENDER_API_KEY){const e=Error('Render API integration is not configured.');e.status=503;e.code='RENDER_NOT_CONFIGURED';throw e}const o=opts||{},r=await fetch('https://api.render.com/v1'+url,{method:o.method||'GET',headers:{Accept:'application/json',Authorization:'Bearer '+env.RENDER_API_KEY,...(o.body?{'Content-Type':'application/json'}:{})},body:o.body?JSON.stringify(o.body):undefined,signal:AbortSignal.timeout(12000)});if(!r.ok){const e=Error(r.status===429?'Render API rate limit reached.':'Render API request failed or was not authorized.');e.status=r.status===404?404:r.status===409?409:r.status===429?503:502;e.code='RENDER_API_ERROR';throw e}return r.status===204?null:r.json()}
+function normalizeService(item){const s=item&&item.service?item.service:item;return{id:s.id,name:s.name||s.id,type:s.type||s.serviceType||'service',status:s.suspended==='suspended'?'suspended':s.status||s.state||'unknown',region:s.region||null,url:s.serviceDetails&&s.serviceDetails.url||s.url||null,updatedAt:s.updatedAt||null};}
+function createApp(pool,env){
+ const app=express();app.disable('x-powered-by');app.set('trust proxy',env.TRUST_PROXY==='false'?false:1);
+ app.use((req,res,next)=>{req.id=crypto.randomUUID();res.setHeader('X-Request-Id',req.id);next()});
+ app.use(helmet({contentSecurityPolicy:{directives:{defaultSrc:["'self'"],scriptSrc:["'self'"],styleSrc:["'self'"],imgSrc:["'self'",'data:'],connectSrc:["'self'"],objectSrc:["'none'"],baseUri:["'self'"],frameAncestors:["'none'"],formAction:["'self'"]}},referrerPolicy:{policy:'no-referrer'},crossOriginEmbedderPolicy:false}));
+ app.use(express.json({limit:'32kb',strict:true}));
+ app.use((req,res,next)=>{if(['POST','PUT','PATCH','DELETE'].includes(req.method)&&!originAllowed(req,env))return sendError(res,403,'UNTRUSTED_ORIGIN','Request origin is not allowed.');next()});
+ app.use('/api/',rateLimit({windowMs:60000,limit:120,standardHeaders:true,legacyHeaders:false}));
+ const loginLimit=rateLimit({windowMs:900000,limit:10,standardHeaders:true,legacyHeaders:false,message:{error:{code:'LOGIN_RATE_LIMIT',message:'Too many login attempts. Try again later.'}}});
+ const auth=apiRoute(async(req,res,next)=>{const t=cookies(req.headers.cookie)[COOKIE];if(!t)return sendError(res,401,'AUTH_REQUIRED','Please sign in.');const result=await pool.query('SELECT s.csrf_token,u.id,u.email,u.role,u.active,u.created_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>NOW() AND u.active=TRUE LIMIT 1',[tokenHash(t,env.SESSION_SECRET)]);if(!result.rows.length){res.setHeader('Set-Cookie',setCookie('',0,env.NODE_ENV==='production'));return sendError(res,401,'SESSION_EXPIRED','Session expired. Sign in again.')}req.user=result.rows[0];req.csrf=req.user.csrf_token;next()});
+ const role=(...roles)=>(req,res,next)=>req.user&&roles.includes(req.user.role)?next():sendError(res,403,'FORBIDDEN','You do not have permission.');
+ const csrf=(req,res,next)=>{const got=req.get('x-csrf-token')||'';if(!got||got.length!==req.csrf.length||!crypto.timingSafeEqual(Buffer.from(got),Buffer.from(req.csrf)))return sendError(res,403,'CSRF_INVALID','Security token is missing or invalid.');next()};
+ const serviceAllowed=id=>{if(!/^[A-Za-z0-9_-]{3,128}$/.test(id)||!allowlist(env).has(id)){const e=Error('Service is not in the configured allowlist.');e.status=404;e.code='SERVICE_NOT_ALLOWED';throw e}};
+ app.get('/healthz',apiRoute(async(_q,res)=>{try{await pool.query('SELECT 1');res.json({ok:true,service:'server-management-panel',version:VERSION})}catch(_){sendError(res,503,'DEPENDENCY_UNAVAILABLE','Required dependency unavailable.')}}));
+ app.get('/api/v1/meta',(_q,res)=>res.json({service:'Server Management Panel',version:VERSION,docs:'/api/v1/meta',health:'/healthz',roles:['admin','operator','viewer']}));
+ app.post('/api/v1/auth/login',loginLimit,apiRoute(async(req,res)=>{const email=typeof req.body.email==='string'?req.body.email.trim().toLowerCase():'',password=typeof req.body.password==='string'?req.body.password:'';if(!email||!password||email.length>254||password.length>256)return sendError(res,400,'INVALID_INPUT','Enter a valid email and password.');const result=await pool.query('SELECT id,email,password_hash,role,active,created_at FROM users WHERE email=$1 LIMIT 1',[email]),u=result.rows[0],matches=await passwordMatches(password,u?u.password_hash:'');if(!u||!u.active||!matches){await pool.query('INSERT INTO audit_logs(actor_id,action,target_type,target_id,detail,ip_address) VALUES(NULL,$1,$2,$3,$4::jsonb,$5)',['auth.login_failed','user',email,JSON.stringify({reason:'invalid_credentials'}),req.ip||null]).catch(()=>{});return sendError(res,401,'INVALID_CREDENTIALS','Email or password is incorrect.')}const t=token(),csrfToken=token();await pool.query("INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at) VALUES($1,$2,$3,NOW()+INTERVAL '12 hours')",[tokenHash(t,env.SESSION_SECRET),u.id,csrfToken]);req.user=u;await audit(pool,req,'auth.login','user',u.id,{});res.setHeader('Set-Cookie',setCookie(t,43200,env.NODE_ENV==='production'));res.json({user:publicUser(u),csrfToken,expiresIn:43200})}));
+ app.get('/api/v1/auth/me',auth,(req,res)=>res.json({user:publicUser(req.user),csrfToken:req.csrf}));
+ app.post('/api/v1/auth/logout',auth,csrf,apiRoute(async(req,res)=>{await pool.query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash(cookies(req.headers.cookie)[COOKIE],env.SESSION_SECRET)]);await audit(pool,req,'auth.logout','user',req.user.id,{});res.setHeader('Set-Cookie',setCookie('',0,env.NODE_ENV==='production'));res.status(204).end()}));
+ app.get('/api/v1/monitoring/local',auth,(_req,res)=>{const m=process.memoryUsage();res.json({capturedAt:new Date().toISOString(),runtime:{node:process.version,platform:process.platform,uptimeSeconds:Math.floor(process.uptime()),pid:process.pid},processMemory:{rssBytes:m.rss,heapUsedBytes:m.heapUsed,heapTotalBytes:m.heapTotal},system:{visibleCpuCount:os.availableParallelism?os.availableParallelism():os.cpus().length,loadAverage:os.loadavg(),freeMemoryBytes:os.freemem(),totalMemoryBytes:os.totalmem()},scope:'Current app instance only; not an account-wide host or Docker inventory.'})});
+ app.get('/api/v1/services',auth,role('admin','operator'),apiRoute(async(_req,res)=>{const ids=allowlist(env);if(!ids.size)return res.json({services:[],integrationConfigured:!!env.RENDER_API_KEY,allowedServiceIdsConfigured:false});const data=await renderApi(env,'/services?limit=100'),items=Array.isArray(data)?data:(data.services||[]);res.json({services:items.map(normalizeService).filter(s=>ids.has(s.id)),integrationConfigured:true,allowedServiceIdsConfigured:true})}));
+ app.get('/api/v1/services/:id/deploys',auth,role('admin','operator'),apiRoute(async(req,res)=>{serviceAllowed(req.params.id);const data=await renderApi(env,'/services/'+encodeURIComponent(req.params.id)+'/deploys?limit=10'),items=Array.isArray(data)?data:(data.deploys||[]);res.json({deploys:items.map(i=>{const d=i.deploy||i;return{id:d.id,status:d.status,trigger:d.trigger,commit:d.commit?{id:d.commit.id,message:d.commit.message}:null,createdAt:d.createdAt,updatedAt:d.updatedAt,finishedAt:d.finishedAt}})})}));
+ app.post('/api/v1/services/:id/deploy',auth,csrf,role('admin'),apiRoute(async(req,res)=>{serviceAllowed(req.params.id);const d=await renderApi(env,'/services/'+encodeURIComponent(req.params.id)+'/deploys',{method:'POST',body:{clearCache:req.body.clearCache===true?'clear':'do_not_clear',deployMode:'build_and_deploy'}});await audit(pool,req,'render.deploy','service',req.params.id,{clearCache:req.body.clearCache===true});res.status(202).json({deploy:d})}));
+ app.post('/api/v1/services/:id/restart',auth,csrf,role('admin'),apiRoute(async(req,res)=>{serviceAllowed(req.params.id);await renderApi(env,'/services/'+encodeURIComponent(req.params.id)+'/restart',{method:'POST'});await audit(pool,req,'render.restart','service',req.params.id,{});res.json({restarted:true})}));
+ app.get('/api/v1/users',auth,role('admin'),apiRoute(async(_req,res)=>{const r=await pool.query('SELECT id,email,role,active,created_at FROM users ORDER BY created_at DESC LIMIT 500');res.json({users:r.rows.map(publicUser)})}));
+ app.post('/api/v1/users',auth,csrf,role('admin'),apiRoute(async(req,res)=>{const email=typeof req.body.email==='string'?req.body.email.trim().toLowerCase():'',roleName=req.body.role;if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254)return sendError(res,400,'INVALID_EMAIL','Enter a valid email address.');if(!ROLES.has(roleName))return sendError(res,400,'INVALID_ROLE','Choose admin, operator or viewer.');let h;try{h=await makePasswordHash(req.body.password)}catch(e){return sendError(res,400,'INVALID_PASSWORD',e.message)}const id=crypto.randomUUID();try{const r=await pool.query('INSERT INTO users(id,email,password_hash,role) VALUES($1,$2,$3,$4) RETURNING id,email,role,active,created_at',[id,email,h,roleName]);await audit(pool,req,'user.create','user',id,{email,role:roleName});res.status(201).json({user:publicUser(r.rows[0])})}catch(e){if(e.code==='23505')return sendError(res,409,'EMAIL_EXISTS','A user with this email already exists.');throw e}}));
+ app.patch('/api/v1/users/:id',auth,csrf,role('admin'),apiRoute(async(req,res)=>{const b=req.body||{},hr=Object.hasOwn(b,'role'),ha=Object.hasOwn(b,'active'),hp=Object.hasOwn(b,'password');if(!hr&&!ha&&!hp)return sendError(res,400,'NO_CHANGES','Provide role, active or password.');if(hr&&!ROLES.has(b.role))return sendError(res,400,'INVALID_ROLE','Choose admin, operator or viewer.');if(ha&&typeof b.active!=='boolean')return sendError(res,400,'INVALID_ACTIVE','active must be boolean.');let h=null;if(hp){try{h=await makePasswordHash(b.password)}catch(e){return sendError(res,400,'INVALID_PASSWORD',e.message)}}const c=await pool.connect();try{await c.query('BEGIN');await c.query('SELECT pg_advisory_xact_lock(742019384)');const f=await c.query('SELECT id,role,active FROM users WHERE id=$1 FOR UPDATE',[req.params.id]);if(!f.rows.length){await c.query('ROLLBACK');return sendError(res,404,'USER_NOT_FOUND','User not found.')}const u=f.rows[0],r=hr?b.role:u.role,a=ha?b.active:u.active;if(u.role==='admin'&&u.active&&(r!=='admin'||!a)){const n=await c.query("SELECT COUNT(*)::int AS n FROM users WHERE role='admin' AND active=TRUE");if(Number(n.rows[0].n)<=1){await c.query('ROLLBACK');return sendError(res,409,'LAST_ADMIN','At least one active administrator must remain.')}}const updated=await c.query('UPDATE users SET role=$2,active=$3,password_hash=COALESCE($4,password_hash),updated_at=NOW() WHERE id=$1 RETURNING id,email,role,active,created_at',[req.params.id,r,a,h]);if(!a||h)await c.query('DELETE FROM sessions WHERE user_id=$1',[req.params.id]);await c.query('COMMIT');await audit(pool,req,'user.update','user',req.params.id,{role:hr?r:undefined,active:ha?a:undefined,passwordReset:!!h});res.json({user:publicUser(updated.rows[0])})}catch(e){await c.query('ROLLBACK').catch(()=>{});throw e}finally{c.release()}}));
+ app.get('/api/v1/audit-logs',auth,role('admin'),apiRoute(async(req,res)=>{const n=Number.parseInt(req.query.limit,10),limit=Number.isFinite(n)?Math.max(1,Math.min(n,200)):50,r=await pool.query('SELECT a.id,a.action,a.target_type,a.target_id,a.detail,a.ip_address,a.created_at,u.email AS actor_email FROM audit_logs a LEFT JOIN users u ON u.id=a.actor_id ORDER BY a.created_at DESC LIMIT $1',[limit]);res.json({events:r.rows.map(x=>({id:x.id,action:x.action,targetType:x.target_type,targetId:x.target_id,detail:x.detail,ipAddress:x.ip_address,createdAt:x.created_at,actorEmail:x.actor_email}))})}));
+ app.use('/api/',(_req,res)=>sendError(res,404,'ROUTE_NOT_FOUND','API route not found.'));
+ app.use(express.static(path.join(__dirname,'public'),{index:'index.html',maxAge:env.NODE_ENV==='production'?'1h':0}));
+ app.use((_req,res)=>res.status(404).send('Not found'));
+ app.use((e,req,res,_next)=>{const status=Number.isInteger(e.status)?e.status:500;if(status>=500)console.error(JSON.stringify({event:'request_failed',requestId:req.id,status,code:e.code||'INTERNAL_ERROR',message:e.message}));if(res.headersSent)return res.end();sendError(res,status,e.code||'REQUEST_FAILED',status===500?'An unexpected server error occurred.':e.message)});
+ return app;
+}
+async function migrate(pool,env){
+ await pool.query("CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('admin','operator','viewer')),active BOOLEAN NOT NULL DEFAULT TRUE,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+ await pool.query("CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,csrf_token TEXT NOT NULL,expires_at TIMESTAMPTZ NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+ await pool.query('CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id)');
+ await pool.query("CREATE TABLE IF NOT EXISTS audit_logs(id BIGSERIAL PRIMARY KEY,actor_id TEXT REFERENCES users(id) ON DELETE SET NULL,action TEXT NOT NULL,target_type TEXT,target_id TEXT,detail JSONB NOT NULL DEFAULT '{}'::jsonb,ip_address INET,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+ await pool.query('CREATE INDEX IF NOT EXISTS audit_logs_created_at_idx ON audit_logs(created_at DESC)');await pool.query('DELETE FROM sessions WHERE expires_at<=NOW()');
+ const count=await pool.query('SELECT COUNT(*)::int AS count FROM users');if(Number(count.rows[0].count)>0)return;
+ const email=String(env.BOOTSTRAP_ADMIN_EMAIL||'').trim().toLowerCase(),password=String(env.BOOTSTRAP_ADMIN_PASSWORD||'');if(!email||!password)throw Error('No admin exists. Set BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD for the first start.');if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw Error('BOOTSTRAP_ADMIN_EMAIL is invalid.');
+ await pool.query('INSERT INTO users(id,email,password_hash,role) VALUES($1,$2,$3,$4)',[crypto.randomUUID(),email,await makePasswordHash(password),'admin']);console.info(JSON.stringify({event:'bootstrap_admin_created',email}));
+}
+async function start(){
+ const env=process.env;if(!env.DATABASE_URL)throw Error('DATABASE_URL is required.');if(!env.SESSION_SECRET||env.SESSION_SECRET.length<32)throw Error('SESSION_SECRET must be at least 32 characters.');
+ if(env.NODE_ENV==='production'){let u;try{u=new URL(env.APP_ORIGIN||'')}catch(_){throw Error('APP_ORIGIN must be the exact public HTTPS origin.')}if(u.protocol!=='https:'||u.origin!==env.APP_ORIGIN)throw Error('APP_ORIGIN must be HTTPS without a trailing slash.')}
+ const pool=new Pool({connectionString:env.DATABASE_URL,max:Number(env.PG_POOL_MAX||10),idleTimeoutMillis:30000,connectionTimeoutMillis:10000,application_name:'server-management-panel'});
+ try{await migrate(pool,env);const server=createApp(pool,env).listen(Number(env.PORT||10000),'0.0.0.0',()=>console.info(JSON.stringify({event:'server_started',port:Number(env.PORT||10000),version:VERSION})));let closing=false;function shutdown(signal){if(closing)return;closing=true;console.info(JSON.stringify({event:'shutdown_started',signal}));server.close(()=>pool.end().then(()=>process.exit(0)));setTimeout(()=>process.exit(1),10000).unref()}process.on('SIGTERM',()=>shutdown('SIGTERM'));process.on('SIGINT',()=>shutdown('SIGINT'))}catch(e){await pool.end().catch(()=>{});throw e}
+}
+if(require.main===module)start().catch(e=>{console.error(JSON.stringify({event:'startup_failed',message:e.message}));process.exitCode=1});
+module.exports={createApp,passwordMatches,tokenHash,allowlist,trustedOrigin,normalizeService,makePasswordHash};
