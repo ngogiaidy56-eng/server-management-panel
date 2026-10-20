@@ -38,7 +38,8 @@ CI uses Node.js 22 and runs syntax, configuration, HTTP security, session and RB
 
 - GET /healthz: readiness check including database connectivity.
 - GET /api/v1/meta: service metadata.
-- POST /api/v1/auth/login, GET /api/v1/auth/me, POST /api/v1/auth/logout: session auth.\n- POST /api/v1/auth/change-password: verifies the current password, rotates the password, invalidates old sessions and issues a fresh session.
+- POST /api/v1/auth/login, GET /api/v1/auth/me, POST /api/v1/auth/logout: session auth.
+- POST /api/v1/auth/change-password: verifies the current password, rotates the password, invalidates old sessions and issues a fresh session.
 - GET /api/v1/monitoring/local: current process and instance runtime snapshot.
 - GET /api/v1/services and GET /api/v1/services/:id/deploys: Admin/Operator only.
 - POST /api/v1/services/:id/deploy and POST /api/v1/services/:id/restart: Admin only; CSRF token required.
@@ -51,4 +52,9 @@ Mutation requests must send X-CSRF-Token returned by login or /api/v1/auth/me. S
 
 Runtime telemetry describes the current app instance, not an account-wide host or full metrics history. Remote operations affect only allowlisted Render service IDs. No public shell execution, arbitrary Docker access, secret disclosure or destructive service deletion endpoint is provided.
 
-Configure database backups, secret rotation, minimum-privilege API keys and your organization’s MFA requirements before broad exposure. A green CI run does not by itself prove a Render deployment is live; verify deployment and /healthz after completing environment setup.\n\n## Operations documentation\n\n- [Production operations runbook](docs/operations-runbook.md)\n- [Security model and role matrix](docs/security-model.md)\n
+Configure database backups, secret rotation, minimum-privilege API keys and your organization’s MFA requirements before broad exposure. A green CI run does not by itself prove a Render deployment is live; verify deployment and /healthz after completing environment setup.
+
+## Operations documentation
+
+- [Production operations runbook](docs/operations-runbook.md)
+- [Security model and role matrix](docs/security-model.md)
