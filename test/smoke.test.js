@@ -19,50 +19,63 @@ const TEST_SECRET = 'a-test-session-secret-long-enough-for-testing';
 
 function makePool(user) {
   let session = null;
-  return {
-    async query(sql, params = []) {
-      if (sql.startsWith('SELECT 1')) return { rows: [{ ok: 1 }] };
+  async function query(sql, params = []) {
+    if (sql.startsWith('SELECT 1')) return { rows: [{ ok: 1 }] };
 
-      if (sql.includes('FROM users WHERE email=$1')) {
-        return { rows: user && user.email === params[0] ? [user] : [] };
-      }
+    if (sql.includes('FROM users WHERE email=$1')) {
+      return { rows: user && user.email === params[0] ? [user] : [] };
+    }
 
-      if (sql.startsWith('INSERT INTO sessions')) {
-        session = {
-          token_hash: params[0],
-          user_id: params[1],
-          csrf_token: params[2]
+    if (sql.includes('SELECT password_hash FROM users')) {
+      return { rows: user && user.id === params[0] && user.active ? [{ password_hash: user.password_hash }] : [] };
+    }
+
+    if (sql.startsWith('UPDATE users SET password_hash=$2')) {
+      if (user && user.id === params[0]) user.password_hash = params[1];
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.startsWith('INSERT INTO sessions')) {
+      session = {
+        token_hash: params[0],
+        user_id: params[1],
+        csrf_token: params[2]
+      };
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.includes('FROM sessions s JOIN users u')) {
+      if (session && user && user.active && session.token_hash === params[0]) {
+        return {
+          rows: [{
+            csrf_token: session.csrf_token,
+            id: user.id,
+            email: user.email,
+            role: user.role,
+            active: user.active,
+            created_at: user.created_at
+          }]
         };
-        return { rows: [], rowCount: 1 };
       }
-
-      if (sql.includes('FROM sessions s JOIN users u')) {
-        if (session && user && user.active && session.token_hash === params[0]) {
-          return {
-            rows: [{
-              csrf_token: session.csrf_token,
-              id: user.id,
-              email: user.email,
-              role: user.role,
-              active: user.active,
-              created_at: user.created_at
-            }]
-          };
-        }
-        return { rows: [] };
-      }
-
-      if (sql.startsWith('DELETE FROM sessions')) {
-        if (session && (session.token_hash === params[0] || session.user_id === params[0])) session = null;
-        return { rows: [], rowCount: 1 };
-      }
-
-      if (sql.startsWith('INSERT INTO audit_logs')) return { rows: [], rowCount: 1 };
       return { rows: [] };
+    }
+
+    if (sql.startsWith('DELETE FROM sessions')) {
+      if (session && (session.token_hash === params[0] || session.user_id === params[0])) session = null;
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.startsWith('INSERT INTO audit_logs')) return { rows: [], rowCount: 1 };
+    return { rows: [] };
+  }
+
+  return {
+    query,
+    async connect() {
+      return { query, release() {} };
     }
   };
 }
-
 async function withServer(pool, run) {
   const app = createApp(pool, {
     NODE_ENV: 'test',
@@ -204,6 +217,62 @@ test('mutations require JSON and block untrusted origins', async () => {
     });
     assert.equal(foreignOrigin.status, 403);
     assert.equal((await foreignOrigin.json()).error.code, 'UNTRUSTED_ORIGIN');
+  });
+});
+
+
+test('password change verifies the old password and rotates the session', async () => {
+  const oldPassword = 'old-user-password-2026';
+  const nextPassword = 'new-user-password-2026';
+  const user = {
+    id: 'user-password',
+    email: 'password@example.test',
+    password_hash: await makePasswordHash(oldPassword),
+    role: 'viewer',
+    active: true,
+    created_at: new Date().toISOString()
+  };
+
+  await withServer(makePool(user), async base => {
+    const login = await fetch(base + '/api/v1/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: TEST_ORIGIN },
+      body: JSON.stringify({ email: user.email, password: oldPassword })
+    });
+    assert.equal(login.status, 200);
+    const loginData = await login.json();
+    const oldCookie = login.headers.get('set-cookie').split(';')[0];
+
+    const changed = await fetch(base + '/api/v1/auth/change-password', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: TEST_ORIGIN,
+        cookie: oldCookie,
+        'x-csrf-token': loginData.csrfToken
+      },
+      body: JSON.stringify({ currentPassword: oldPassword, newPassword: nextPassword })
+    });
+    assert.equal(changed.status, 200);
+    const changedData = await changed.json();
+    assert.equal(changedData.ok, true);
+    assert.ok(changedData.csrfToken);
+    const newCookie = changed.headers.get('set-cookie').split(';')[0];
+    assert.notEqual(newCookie, oldCookie);
+
+    const oldLogin = await fetch(base + '/api/v1/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: TEST_ORIGIN },
+      body: JSON.stringify({ email: user.email, password: oldPassword })
+    });
+    assert.equal(oldLogin.status, 401);
+
+    const newLogin = await fetch(base + '/api/v1/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: TEST_ORIGIN },
+      body: JSON.stringify({ email: user.email, password: nextPassword })
+    });
+    assert.equal(newLogin.status, 200);
   });
 });
 
