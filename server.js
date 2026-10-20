@@ -111,6 +111,7 @@ function createApp(pool,env){
  }));
 
  app.use('/api/',(_req,res)=>sendError(res,404,'ROUTE_NOT_FOUND','API route not found.'));
+ app.get('/app/:slug',(_req,res)=>res.sendFile(path.join(__dirname,'public','app-detail.html')));
  app.get('/',(_req,res)=>res.sendFile(path.join(__dirname,'public','store.html')));
  app.get('/admin',(_req,res)=>res.sendFile(path.join(__dirname,'public','index.html')));
  app.get('/admin/studio',(_req,res)=>res.sendFile(path.join(__dirname,'public','admin.html')));
